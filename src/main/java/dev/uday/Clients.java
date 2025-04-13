@@ -12,7 +12,7 @@ public class Clients {
     private static final String USER_HOME = System.getProperty("user.home");
     private static final String CONFIG_DIR = USER_HOME + File.separator + ".exo" +
             File.separator + "server";
-    private static final String KNOWN_USERS_FILE = CONFIG_DIR + File.separator + "known.txt";
+    private static final String KNOWN_USERS_FILE = CONFIG_DIR + File.separator + "known.users.exo";
 
     static {
         loadRegisteredUsers();

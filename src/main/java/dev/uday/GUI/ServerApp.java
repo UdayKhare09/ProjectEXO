@@ -32,6 +32,11 @@ public class ServerApp extends Application {
         showSplashScreen();
     }
 
+    @Override
+    public void stop() {
+        System.exit(0);
+    }
+
     private void showSplashScreen() {
         try {
             System.out.println("Starting splash screen...");

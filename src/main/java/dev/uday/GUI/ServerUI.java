@@ -129,22 +129,29 @@ public class ServerUI implements Initializable {
 
     private void loadAvailableModels() {
         new Thread(() -> {
-            try {
-                List<Model> models = api.listModels();
-                Platform.runLater(() -> {
-                    availableModelsList.clear();
-                    for (Model model : models) {
-                        availableModelsList.add(model.getName());
-                    }
-                    if (availableModelsList.isEmpty()) {
-                        availableModelsList.add("No models found");
-                    }
-                });
-            } catch (Exception e) {
-                Platform.runLater(() -> {
-                    availableModelsList.add("Error loading models");
-                    availableModelsList.add("Make sure Ollama is running");
-                });
+            while (true){
+                try {
+                    List<Model> models = api.listModels();
+                    Platform.runLater(() -> {
+                        availableModelsList.clear();
+                        for (Model model : models) {
+                            availableModelsList.add(model.getName());
+                        }
+                        if (availableModelsList.isEmpty()) {
+                            availableModelsList.add("No models found");
+                        }
+                    });
+                } catch (Exception e) {
+                    Platform.runLater(() -> {
+                        availableModelsList.add("Error loading models");
+                        availableModelsList.add("Make sure Ollama is running");
+                    });
+                }
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
             }
         }).start();
     }

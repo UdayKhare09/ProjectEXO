@@ -1,6 +1,7 @@
 package dev.uday.NET.Packets;
 
 import dev.uday.AI.AIHandler;
+import dev.uday.NET.Server;
 
 import java.util.Arrays;
 import java.util.UUID;
@@ -26,6 +27,17 @@ public class PacketHandler {
                 System.out.println("Handling AI prompt");
                 AIHandler.handleAIPacket(packetData, sender);
                 break;
+            case 10:
+                handleHeartbeat(packetData, sender);
+        }
+    }
+
+    private static void handleHeartbeat(byte[] packet, UUID sender) {
+        byte packetType = packet[0];
+        if (packetType == 1) {
+            Server.currentClients.get(sender).lastHeartbeatTime = System.currentTimeMillis();
+        } else {
+            System.out.println("Unknown ping packet type: " + packetType);
         }
     }
 }

@@ -13,6 +13,7 @@ public class Client {
     public UUID uuid;
     public PublicKey publicKey;
     public Server.ClientHandler clientHandler;
+    public long lastHeartbeatTime;
 
     public Client(Socket clientSocket, UUID uuid) {
         this.clientSocket = clientSocket;

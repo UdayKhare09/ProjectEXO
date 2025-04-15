@@ -15,6 +15,10 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class Server {
     private ServerSocket serverSocket;
@@ -24,6 +28,11 @@ public class Server {
     public static String ip;
     public static String serverName = "SoloLeveler";
     Logger logger;
+
+    // Heartbeat executor
+    private static final ScheduledExecutorService heartbeatExecutor = new ScheduledThreadPoolExecutor(1);
+    // Timeout after 15 seconds of no response (3 missed heartbeats)
+    private static final long HEARTBEAT_TIMEOUT_MS = 10000;
 
     public Server(int port) {
         if (port != 0) {
@@ -35,9 +44,50 @@ public class Server {
             ip = InetAddress.getLocalHost().getHostAddress();
             logger.info("Server started on port: {}", PORT);
             keyPair = generateKeyPair();
+
+            startHeartbeatMonitor();
         } catch (IOException | NoSuchAlgorithmException e) {
             logger.error(e.getMessage());
         }
+    }
+
+    public static void closeExecutor() {
+        try {
+            heartbeatExecutor.shutdown();
+            if (!heartbeatExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+                heartbeatExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            heartbeatExecutor.shutdownNow();
+        }
+    }
+
+    private void startHeartbeatMonitor() {
+        heartbeatExecutor.scheduleAtFixedRate(() -> {
+            if (currentClients.isEmpty()) {
+                return;
+            }
+
+            // Current time to compare against
+            long currentTime = System.currentTimeMillis();
+
+            // Check each client for timeout
+            currentClients.forEach((uuid, client) -> {
+                if (currentTime - client.lastHeartbeatTime > HEARTBEAT_TIMEOUT_MS) {
+                    logger.info("Client {} ({}): No heartbeat, disconnecting", client.username, client.IP);
+                    if (client.clientHandler != null) {
+                        client.clientHandler.closeClientSocket();
+                    } else {
+                        currentClients.remove(uuid);
+                    }
+                } else {
+                    // Send heartbeat to client
+                    if (client.clientHandler != null) {
+                        client.clientHandler.sendHeartbeat();
+                    }
+                }
+            });
+        }, 5, 5, TimeUnit.SECONDS);  // Run every 5 seconds
     }
 
     public static UUID getUUIDFromUsername(String recipientUsername) {
@@ -55,7 +105,10 @@ public class Server {
                 Socket clientSocket = serverSocket.accept();
                 logger.info("Client connected: {}", clientSocket.getInetAddress());
                 UUID uuid = generateUniqueUUID();
-                currentClients.put(uuid, new Client(clientSocket, uuid));
+                Client client = new Client(clientSocket, uuid);
+                // Set initial heartbeat time
+                client.lastHeartbeatTime = System.currentTimeMillis();
+                currentClients.put(uuid, client);
                 logger.info(uuid.toString());
 
                 ClientHandler clientHandler = new ClientHandler(clientSocket, keyPair.getPublic(), uuid);
@@ -126,6 +179,7 @@ public class Server {
         public String username;
         public String password;
         private Logger logger;
+        private final AtomicBoolean isRunning = new AtomicBoolean(true);
 
         public ClientHandler(Socket socket, PublicKey publicKey, UUID uuid) throws NoSuchPaddingException, NoSuchAlgorithmException {
             this.clientSocket = socket;
@@ -202,6 +256,7 @@ public class Server {
 
         public void sendPacket(byte[] bytes) {
             try {
+                if (!isRunning.get()) return;
                 int chunkSize = 240;
                 int totalChunks = (int) Math.ceil((double) bytes.length / chunkSize);
 
@@ -231,7 +286,7 @@ public class Server {
 
         public void startReceivingPacket() {
             try {
-                while (true) {
+                while (isRunning.get()) {
                     byte[] decryptedHeader = receiveAndDecryptData();
                     String header = new String(decryptedHeader);
                     int totalSize = Integer.parseInt(header.split(";")[0].split(":")[1]);
@@ -274,6 +329,12 @@ public class Server {
 
         private boolean isClientLoggedIn(String username) {
             return currentClients.values().stream().anyMatch(client -> client.username.equals(username));
+        }
+
+        public void sendHeartbeat() {
+            if (!isRunning.get()) return;
+            byte[] packetType= {10,1};
+            sendPacket(packetType);
         }
     }
 

@@ -13,6 +13,8 @@ import java.net.Socket;
 import java.security.*;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
@@ -71,22 +73,50 @@ public class Server {
             // Current time to compare against
             long currentTime = System.currentTimeMillis();
 
+            // Create a list of UUIDs to remove after iteration
+            final List<UUID> clientsToRemove = new ArrayList<>();
+
             // Check each client for timeout
             currentClients.forEach((uuid, client) -> {
                 if (currentTime - client.lastHeartbeatTime > HEARTBEAT_TIMEOUT_MS) {
                     logger.info("Client {} ({}): No heartbeat, disconnecting", client.username, client.IP);
-                    if (client.clientHandler != null) {
-                        client.clientHandler.closeClientSocket();
-                    } else {
-                        currentClients.remove(uuid);
-                    }
+                    clientsToRemove.add(uuid);
                 } else {
                     // Send heartbeat to client
-                    if (client.clientHandler != null) {
-                        client.clientHandler.sendHeartbeat();
+                    try {
+                        if (client.clientHandler != null && client.clientHandler.isRunning.get()) {
+                            client.clientHandler.sendHeartbeat();
+                        }
+                    } catch (Exception e) {
+                        logger.error("Error sending heartbeat to client {}: {}", client.username, e.getMessage());
+                        clientsToRemove.add(uuid);
                     }
                 }
             });
+
+            // Remove disconnected clients outside of the iteration
+            for (UUID uuid : clientsToRemove) {
+                try {
+                    Client client = currentClients.get(uuid);
+                    if (client != null && client.clientHandler != null) {
+                        client.clientHandler.isRunning.set(false);
+                        client.clientHandler.closeClientSocket();
+                    }
+                    currentClients.remove(uuid);
+                } catch (Exception e) {
+                    logger.error("Error removing client with UUID {}: {}", uuid, e.getMessage());
+                }
+            }
+
+            // Only broadcast if clients were removed
+            if (!clientsToRemove.isEmpty()) {
+                // Broadcast updated client list
+                try {
+                    broadcastCurrentClients();
+                } catch (Exception e) {
+                    logger.error("Error broadcasting client list: {}", e.getMessage());
+                }
+            }
         }, 5, 5, TimeUnit.SECONDS);  // Run every 5 seconds
     }
 
@@ -179,7 +209,7 @@ public class Server {
         public String username;
         public String password;
         private Logger logger;
-        private final AtomicBoolean isRunning = new AtomicBoolean(true);
+        public final AtomicBoolean isRunning = new AtomicBoolean(true);
 
         public ClientHandler(Socket socket, PublicKey publicKey, UUID uuid) throws NoSuchPaddingException, NoSuchAlgorithmException {
             this.clientSocket = socket;
@@ -316,14 +346,33 @@ public class Server {
             return cipher.doFinal(dataBytes);
         }
 
-        private void closeClientSocket() {
+        public void closeClientSocket() {
+            if (!isRunning.getAndSet(false)) {
+                // Already closed, prevent double-close
+                return;
+            }
+
             try {
-                clientSocket.close();
-                currentClients.remove(uuid);
-                broadcastCurrentClients();
-                this.interrupt();
+                if (inputStream != null) {
+                    inputStream.close();
+                }
+                if (outputStream != null) {
+                    outputStream.close();
+                }
+                if (clientSocket != null && !clientSocket.isClosed()) {
+                    clientSocket.close();
+                }
+
+                // This is now handled by the heartbeat monitor to prevent ConcurrentModificationException
+                // Only remove from the collection here if it's explicitly called by the client itself
+                if (Thread.currentThread() == this) {
+                    currentClients.remove(uuid);
+                    broadcastCurrentClients();
+                }
             } catch (IOException e) {
-                logger.error(e.getMessage());
+                logger.error("Error closing client socket: {}", e.getMessage());
+            } finally {
+                this.interrupt();
             }
         }
 
